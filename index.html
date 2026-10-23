@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ionopost Listen</title>
+<meta name="description" content="Receive-only JS8 decoder that runs on the phone.">
+<meta name="theme-color" content="#0e141b" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#eef1f4" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Listen">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+/* Layout: one column of instrument panels under a sticky slot clock; the log is the page. */
+:root {
+  --bg: #eef1f4; --panel: #ffffff; --ink: #142030; --muted: #5b6878; --line: #d5dce4;
+  --lamp: #b86e00; --lamp-soft: #f6e6cc; --good: #2e7d4f; --bad: #b3261e;
+  --sans: -apple-system, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e141b; --panel: #16202b; --ink: #e6edf3; --muted: #8a9aac; --line: #263443;
+  --lamp: #f2a93b; --lamp-soft: #3a2c14; --good: #5cc48a; --bad: #ff8a80; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0e141b; --panel: #16202b; --ink: #e6edf3; --muted: #8a9aac; --line: #263443;
+  --lamp: #f2a93b; --lamp-soft: #3a2c14; --good: #5cc48a; --bad: #ff8a80; color-scheme: dark; }
+:root { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--sans); -webkit-text-size-adjust: 100%; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+[hidden] { display: none !important; }
+.wrap { max-width: 720px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px));
+        padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 32px;
+        display: grid; gap: 14px; }
+
+/* sticky clock */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg);
+       padding-block: 12px 10px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.name { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; margin: 0; }
+.pill { font: 600 12px/1 var(--sans); letter-spacing: 0.04em; text-transform: uppercase; padding: 5px 9px;
+        border-radius: 999px; background: var(--line); color: var(--muted); }
+.pill.on { background: var(--lamp-soft); color: var(--lamp); }
+.pill.err { color: var(--bad); }
+.utc { margin-left: auto; font: 600 17px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.utc small { font-size: 11px; color: var(--muted); font-weight: 500; margin-left: 4px; }
+.ticks { display: grid; grid-template-columns: repeat(15, 1fr); gap: 3px; }
+.ticks i { height: 6px; border-radius: 2px; background: var(--line); }
+.ticks i.done { background: var(--lamp); }
+.slotline { font: 12px/1.3 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; min-height: 1.3em; }
+
+/* panels */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.panel h2 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+button { font: 600 15px/1 var(--sans); border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
+         color: var(--ink); padding: 12px 16px; cursor: pointer; }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
+button.primary { background: var(--lamp); border-color: var(--lamp); color: var(--panel); min-width: 9em; }
+button.small { font-size: 13px; padding: 8px 12px; }
+.meter { flex: 1 1 160px; height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; min-width: 120px; }
+.meter b { display: block; height: 100%; width: 0; background: var(--good); transition: width 0.15s; }
+.meter b.hot { background: var(--bad); }
+.muted { color: var(--muted); }
+.note { font-size: 13px; color: var(--muted); margin: 0; }
+.warn { color: var(--bad); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; margin: 0; }
+@media (max-width: 480px) { .kv { grid-template-columns: 1fr; gap: 0; } .kv dd { margin-bottom: 6px; } }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+
+/* tabs and log */
+.tabs { display: flex; gap: 6px; }
+.tabs button { flex: 1; font-size: 14px; padding: 10px 8px; }
+.tabs button[aria-selected="true"] { border-color: var(--lamp); color: var(--lamp); background: var(--lamp-soft); }
+.tabs .count { font: 500 12px var(--mono); margin-left: 4px; opacity: 0.8; }
+ul.log { list-style: none; margin: 0; padding: 0; display: grid; }
+ul.log li { display: grid; grid-template-columns: 4.6em 1fr auto; gap: 2px 10px; padding: 9px 0; border-top: 1px solid var(--line); align-items: baseline; }
+ul.log li:first-child { border-top: 0; }
+.t { font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.txt { font: 14px/1.4 var(--mono); min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.meta { font: 12px var(--mono); color: var(--muted); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sub { grid-column: 2 / -1; font-size: 12px; color: var(--muted); }
+.call { font-weight: 700; }
+.ex { opacity: 0.55; }
+.tag { font: 600 10px/1 var(--sans); letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 6px; border-radius: 4px; background: var(--line); color: var(--muted); margin-left: 6px; vertical-align: 1px; }
+.tag.gap { background: var(--lamp-soft); color: var(--lamp); }
+
+/* settings */
+details summary { cursor: pointer; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+details summary::after { content: " +"; } details[open] summary::after { content: " –"; }
+.form { display: grid; gap: 12px; margin-top: 12px; }
+.form label { display: grid; gap: 4px; font-size: 14px; }
+.form .check { display: flex; gap: 10px; align-items: center; }
+.form input[type="number"], .form input[type="text"] { font: 16px var(--mono); padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); width: 10em; max-width: 100%; }
+.form input[type="checkbox"], .form input[type="radio"] { width: 20px; height: 20px; accent-color: var(--lamp); }
+fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; }
+legend { font-size: 14px; margin-bottom: 4px; }
+footer { font-size: 12px; color: var(--muted); text-align: center; }
+footer a { color: inherit; }
+@media (prefers-reduced-motion: reduce) { .meter b { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="row">
+      <h1 class="name">Ionopost Listen</h1>
+      <span class="pill" id="status">Stopped</span>
+      <span class="utc" id="utc">--:--:--<small>UTC</small></span>
+    </div>
+    <div class="ticks" id="ticks" aria-hidden="true"></div>
+    <div class="slotline" id="slotline">JS8 slots end at :00, :15, :30 and :45. Each is decoded as it ends.</div>
+  </header>
+
+  <section class="panel" aria-labelledby="in-h">
+    <h2 id="in-h">Audio in</h2>
+    <div class="row">
+      <button class="primary" id="go">Listen</button>
+      <div class="meter" title="Input level"><b id="level"></b></div>
+      <span class="t" id="dbfs">— dBFS</span>
+    </div>
+    <p class="note" id="device">Plug the radio into the phone's USB-C port, set it to the JS8 frequency, then tap Listen. Without a radio, the phone's microphone is used.</p>
+    <p class="note warn" id="problem" hidden></p>
+  </section>
+
+  <section class="panel" aria-labelledby="clk-h">
+    <h2 id="clk-h">Timing</h2>
+    <dl class="kv">
+      <dt>Heard stations vs this phone</dt><dd id="dtmed">waiting for decodes</dd>
+      <dt>Slot offset in use</dt><dd id="offnow">0.0 s</dd>
+    </dl>
+  </section>
+
+  <section class="panel" aria-label="Log">
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-msgs" aria-selected="true">Messages<span class="count" id="n-msgs">0</span></button>
+      <button role="tab" id="tab-heard" aria-selected="false">Heard<span class="count" id="n-heard">0</span></button>
+      <button role="tab" id="tab-all" aria-selected="false">All<span class="count" id="n-all">0</span></button>
+    </div>
+    <ul class="log" id="log"></ul>
+  </section>
+
+  <section class="panel">
+    <details>
+      <summary>Settings</summary>
+      <div class="form">
+        <fieldset>
+          <legend>Search band</legend>
+          <label class="check"><input type="radio" name="band" id="band-wide" value="wide" checked> Whole passband, 200–2900 Hz</label>
+          <label class="check"><input type="radio" name="band" id="band-device" value="device"> Cardputer window, 500–1850 Hz</label>
+        </fieldset>
+        <label>Radio dial (kHz), for showing signal frequencies
+          <input type="text" inputmode="decimal" id="dial" placeholder="7078">
+        </label>
+        <label>Slot offset (seconds; positive starts each slot later)
+          <input type="number" id="offset" step="0.1" value="0">
+        </label>
+        <label class="check"><input type="checkbox" id="follow" checked> Adjust the offset to match heard stations</label>
+        <label class="check"><input type="checkbox" id="wake" checked> Keep the screen on while listening</label>
+        <div class="row">
+          <button class="small" id="clear">Clear the log</button>
+          <button class="small" id="clear-yes" hidden>Yes, clear it</button>
+          <button class="small" id="clear-no" hidden>Keep it</button>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <footer>Receive only. Decoding runs on this phone; no audio or decodes leave it. · <a href="NOTICE.txt">Third-party notices</a></footer>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const STORE = "ionopost-listen.v1";
+const MAX_ALL = 600, MAX_MSGS = 200;
+const TYPE_HB = 0, TYPE_CMP = 1, TYPE_CMPD = 2, TYPE_DIR = 3;
+// Directed command 29 is the automatic reply to a heartbeat ("HEARTBEAT SNR" in JS8Call 3.x):
+// on a busy band it is most of the directed traffic, so it stays in All and out of Messages.
+const CMD_HB_SNR = 29;
+
+let st = { all: [], msgs: [], heard: {}, set: { band: "wide", dial: "", offset: 0, follow: true, wake: true } };
+try { const s = JSON.parse(localStorage.getItem(STORE) || "null"); if (s) st = Object.assign(st, s, { set: Object.assign(st.set, s.set || {}) }); } catch (e) {}
+function save() { try { localStorage.setItem(STORE, JSON.stringify(st)); } catch (e) {} }
+
+let tab = "msgs";
+let ctx = null, stream = null, node = null, worker = null, wakeLock = null, running = false;
+let gotChunk = false, dts = [], levelDb = -120;
+
+/* ---------- clock and slot ticks ---------- */
+const ticks = $("ticks");
+for (let i = 0; i < 15; i++) ticks.appendChild(document.createElement("i"));
+function hhmmss(ms) { return new Date(ms).toISOString().slice(11, 19); }
+function tick() {
+  const now = Date.now();
+  $("utc").firstChild.nodeValue = hhmmss(now);
+  const into = ((now - st.set.offset * 1000) % 15000 + 15000) % 15000;
+  const k = Math.floor(into / 1000);
+  [...ticks.children].forEach((el, i) => el.classList.toggle("done", running && i <= k));
+}
+setInterval(tick, 250); tick();
+
+/* ---------- rendering ---------- */
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function freqLabel(f) {
+  const d = parseFloat(st.set.dial);
+  return d > 0 ? (d + f / 1000).toFixed(3) + " kHz" : Math.round(f) + " Hz";
+}
+function ago(ms) {
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 90) return s + " s ago";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  return Math.round(s / 3600) + " h ago";
+}
+function snr(v) { return (v >= 0 ? "+" : "") + v + " dB"; }
+// js8_mode prints a directed frame as "[FROM TO COMMAND]"; show it as FROM → TO: COMMAND.
+function dirBody(x) {
+  let t = x.text.replace(/^\[/, "").replace(/\]$/, "");
+  const pre = x.from + " " + x.to + " ";
+  return t.startsWith(pre) ? t.slice(pre.length) : t;
+}
+function who(from, to) { return from ? `<span class="call">${esc(from)}</span>${to ? " → " + esc(to) : ""}: ` : ""; }
+function clean(t) { return String(t).replace(/^\n+|\n+$/g, ""); }
+
+const EXAMPLES = {
+  msgs: [{ t: "14:32:15", txt: "<b>K1ABC</b> → W9XYZ: MEET ON 40M AT 1800Z", meta: "1078 Hz", sub: "Example" }],
+  heard: [{ t: "K1ABC", txt: "FN42 · heard 6 times", meta: "−08 dB", sub: "Example" }],
+  all: [{ t: "14:32:15", txt: "K1ABC: HB AUTO RELAY FN42", meta: "−08 dB", sub: "Example" },
+        { t: "14:32:00", txt: "<b>W9XYZ</b> → K1ABC: SNR −12", meta: "+02 dB", sub: "Example" }],
+};
+
+function render() {
+  $("n-msgs").textContent = st.msgs.length;
+  $("n-heard").textContent = Object.keys(st.heard).length;
+  $("n-all").textContent = st.all.length;
+  for (const t of ["msgs", "heard", "all"]) $("tab-" + t).setAttribute("aria-selected", String(t === tab));
+  let rows = [];
+  if (tab === "msgs") {
+    rows = st.msgs.map((m) => `<li><span class="t">${hhmmss(m.at)}</span>
+      <span class="txt">${who(m.from, m.to)}${esc(clean(m.text))}${m.gapped ? '<span class="tag gap">frames missed</span>' : ""}</span>
+      <span class="meta">${freqLabel(m.f)}</span></li>`);
+  } else if (tab === "heard") {
+    rows = Object.values(st.heard).sort((a, b) => b.last - a.last).map((h) => `<li>
+      <span class="txt call">${esc(h.call)}</span>
+      <span class="txt">${h.grid ? esc(h.grid) + " · " : ""}heard ${h.n} time${h.n === 1 ? "" : "s"}</span>
+      <span class="meta">${snr(h.snr)}</span>
+      <span class="sub">${ago(h.last)} · ${freqLabel(h.f)}</span></li>`);
+  } else {
+    rows = st.all.map((r) => `<li><span class="t">${hhmmss(r.at)}</span>
+      <span class="txt">${r.type === TYPE_DIR && r.from ? who(r.from, r.to) + esc(dirBody(r)) : esc(clean(r.text))}</span><span class="meta">${snr(r.snr)}</span>
+      <span class="sub">${freqLabel(r.f)} · DT ${r.dt >= 0 ? "+" : ""}${r.dt.toFixed(1)} s</span></li>`);
+  }
+  if (!rows.length) {
+    const note = running ? "Listening. Anything decoded appears here at the end of each 15-second slot."
+                         : "Nothing heard yet. Tap Listen and leave the screen on.";
+    rows = [`<li><span class="t"></span><span class="txt muted" style="font-family:var(--sans)">${note}</span><span></span></li>`]
+      .concat(EXAMPLES[tab].map((e) => `<li class="ex"><span class="t">${e.t}</span><span class="txt">${e.txt}</span>
+        <span class="meta">${e.meta}</span><span class="sub">${e.sub}</span></li>`));
+  }
+  $("log").innerHTML = rows.join("");
+}
+for (const t of ["msgs", "heard", "all"]) $("tab-" + t).onclick = () => { tab = t; render(); };
+
+/* ---------- decodes in ---------- */
+function median(a) { const s = [...a].sort((x, y) => x - y); const n = s.length; return n % 2 ? s[n >> 1] : (s[n / 2 - 1] + s[n / 2]) / 2; }
+
+function onSlot(slot, ms, r) {
+  const at = slot * 15000;
+  const label = `${hhmmss(at)} · ${r.rx ? r.rx.length : 0} decoded · ${r.cand} candidates · ${ms} ms`;
+  $("slotline").textContent = "Last slot " + label;
+  if (r.error) { showProblem("Decoder: " + r.error); return; }
+  for (const x of r.rx) {
+    st.all.unshift({ at, f: x.f, snr: x.snr, dt: x.dt, text: x.text, type: x.type, cmd: x.cmd, from: x.from, to: x.to });
+    const call = (x.type === TYPE_HB || x.type === TYPE_CMP || x.type === TYPE_CMPD) ? x.call : (x.type === TYPE_DIR ? x.from : "");
+    if (call) {
+      const h = st.heard[call] || (st.heard[call] = { call, n: 0, grid: "" });
+      h.n++; h.last = at; h.snr = x.snr; h.f = x.f; if (x.grid) h.grid = x.grid;
+    }
+    if (x.type === TYPE_DIR && x.cmd !== CMD_HB_SNR) st.msgs.unshift({ at, f: x.f, text: dirBody(x), from: x.from, to: x.to, gapped: 0 });
+    dts.push({ at, dt: x.dt });
+  }
+  for (const m of r.msgs) st.msgs.unshift({ at, f: m.f, text: m.text, from: m.from, to: m.to, gapped: m.gapped });
+  st.all.length = Math.min(st.all.length, MAX_ALL);
+  st.msgs.length = Math.min(st.msgs.length, MAX_MSGS);
+  followClock(at);
+  save(); render();
+}
+
+// The phone's clock is usually right to a few tens of milliseconds, but one that has been out of
+// network reach for days drifts. Heard stations are the reference: their median DT is our error.
+function followClock(now) {
+  dts = dts.filter((d) => now - d.at < 10 * 60000);
+  if (dts.length < 3) { $("dtmed").textContent = `waiting for decodes (${dts.length} of 3)`; return; }
+  const med = median(dts.map((d) => d.dt));
+  $("dtmed").textContent = `${med >= 0 ? "+" : ""}${med.toFixed(2)} s median DT, ${dts.length} decodes in 10 min`;
+  if (st.set.follow && dts.length >= 6 && Math.abs(med) > 0.3) {
+    setOffset(Math.round((st.set.offset + 0.5 * med) * 10) / 10);
+    dts = [];
+  }
+}
+function setOffset(v) {
+  st.set.offset = Math.max(-14, Math.min(14, v));
+  $("offset").value = st.set.offset; $("offnow").textContent = st.set.offset.toFixed(1) + " s";
+  if (worker) worker.postMessage({ type: "config", offsetMs: st.set.offset * 1000 });
+  save();
+}
+
+/* ---------- audio ---------- */
+function showProblem(msg) { const p = $("problem"); p.textContent = msg; p.hidden = !msg; }
+function setStatus(text, cls) { const s = $("status"); s.textContent = text; s.className = "pill " + (cls || ""); }
+
+async function start() {
+  showProblem("");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showProblem("This browser cannot use audio input here. Open the page in Safari over https.");
+    return;
+  }
+  setStatus("Starting");
+  try {
+    // Voice processing would treat JS8 tones as noise to cancel, so all of it is switched off.
+    stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 1 } } });
+  } catch (e) {
+    setStatus("Stopped");
+    showProblem(e && e.name === "NotAllowedError"
+      ? "Audio input was not allowed. In Settings › Safari › Microphone, allow it for this site, then tap Listen again."
+      : "Could not open audio input: " + (e && e.message || e));
+    return;
+  }
+  const track = stream.getAudioTracks()[0];
+  $("device").textContent = "Input: " + (track && track.label ? track.label : "audio input");
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  await ctx.resume();
+  await ctx.audioWorklet.addModule("worklet.js");
+  const src = ctx.createMediaStreamSource(stream);
+  // channel 0 only, matching how the desktop captures are made (sox remix 1)
+  node = new AudioWorkletNode(ctx, "tap", { numberOfInputs: 1, numberOfOutputs: 1, channelCount: 1,
+    channelCountMode: "explicit", channelInterpretation: "discrete" });
+  src.connect(node);
+  if (!worker) {
+    worker = new Worker("worker.js");
+    worker.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === "slot") onSlot(m.slot, m.ms, m.result);
+      else if (m.type === "ready") setStatus("Listening", "on");
+      else if (m.type === "gap") $("slotline").textContent = `Audio paused for about ${Math.max(1, Math.round(Math.abs(m.ms) / 1000))} s; restarting from the next whole slot.`;
+      else if (m.type === "error") { setStatus("Error", "err"); showProblem(m.message); }
+    };
+  }
+  worker.postMessage({ type: "init", rate: ctx.sampleRate, band: st.set.band, offsetMs: st.set.offset * 1000 });
+  gotChunk = false;
+  node.port.onmessage = ({ data }) => {
+    gotChunk = true;
+    const a = data.data;
+    let sum = 0, peak = 0;
+    for (let i = 0; i < a.length; i++) { const v = a[i]; sum += v * v; if (v > peak) peak = v; else if (-v > peak) peak = -v; }
+    const db = 10 * Math.log10(sum / a.length + 1e-20);
+    levelDb = 0.7 * levelDb + 0.3 * db;
+    drawLevel(peak);
+    // Wall-clock time of this chunk's first sample: how far the context has run past it.
+    const epoch = Date.now() - (ctx.currentTime - data.frame / ctx.sampleRate) * 1000;
+    worker.postMessage({ type: "audio", frame: data.frame, epoch, data: a }, [a.buffer]);
+  };
+  // Some browsers run an AudioWorklet only when it reaches the speakers. The node writes
+  // nothing to its output, so connecting it through a muted gain changes nothing audible.
+  setTimeout(() => { if (running && !gotChunk && ctx) { const g = ctx.createGain(); g.gain.value = 0; node.connect(g).connect(ctx.destination); } }, 1500);
+  running = true;
+  $("go").textContent = "Stop";
+  if (st.set.wake) keepAwake();
+  render();
+}
+
+function stop() {
+  running = false;
+  if (worker) worker.postMessage({ type: "stop" });
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  if (ctx) ctx.close();
+  ctx = stream = node = null;
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  setStatus("Stopped");
+  $("go").textContent = "Listen";
+  drawLevel(0); levelDb = -120;
+  render();
+}
+
+function drawLevel(peak) {
+  const pct = Math.max(0, Math.min(100, (levelDb + 100) * 1.25));
+  const b = $("level");
+  b.style.width = (running ? pct : 0) + "%";
+  b.classList.toggle("hot", peak > 0.9);
+  $("dbfs").textContent = running ? Math.round(levelDb) + " dBFS" : "— dBFS";
+  if (running && peak > 0.98) showProblem("The input is clipping. Turn the radio's audio level down.");
+}
+
+async function keepAwake() {
+  try { if ("wakeLock" in navigator && document.visibilityState === "visible") wakeLock = await navigator.wakeLock.request("screen"); }
+  catch (e) { /* not granted; decoding pauses if the screen locks */ }
+}
+document.addEventListener("visibilitychange", () => { if (running && st.set.wake && document.visibilityState === "visible") keepAwake(); });
+
+$("go").onclick = () => (running ? stop() : start());
+
+/* ---------- settings ---------- */
+$("band-" + st.set.band).checked = true;
+$("dial").value = st.set.dial;
+$("offset").value = st.set.offset; $("offnow").textContent = Number(st.set.offset).toFixed(1) + " s";
+$("follow").checked = st.set.follow;
+$("wake").checked = st.set.wake;
+for (const b of ["wide", "device"]) $("band-" + b).onchange = () => { st.set.band = b; save(); if (worker) worker.postMessage({ type: "config", band: b }); };
+$("dial").oninput = () => { st.set.dial = $("dial").value.trim(); save(); render(); };
+$("offset").onchange = () => setOffset(parseFloat($("offset").value) || 0);
+$("follow").onchange = () => { st.set.follow = $("follow").checked; save(); };
+$("wake").onchange = () => { st.set.wake = $("wake").checked; save(); if (running && st.set.wake) keepAwake(); };
+$("clear").onclick = () => { $("clear").hidden = true; $("clear-yes").hidden = $("clear-no").hidden = false; };
+$("clear-no").onclick = () => { $("clear").hidden = false; $("clear-yes").hidden = $("clear-no").hidden = true; };
+$("clear-yes").onclick = () => { st.all = []; st.msgs = []; st.heard = {}; save(); render(); $("clear-no").onclick(); };
+
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+render();
+setInterval(() => { if (tab === "heard") render(); }, 30000);
+</script>
+</body>
+</html>
