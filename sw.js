@@ -1,6 +1,6 @@
 // sw.js — keeps the whole app on the phone, so it opens with no signal: in the field is the point.
 // The cache name carries a hash of the build; a new build replaces the old cache on next open.
-const CACHE = "ionopost-listen-abedde0a0628";
+const CACHE = "ionopost-listen-266884ca76a5";
 const FILES = ["./", "index.html", "worker.js", "worklet.js", "webrx.js", "webrx.wasm", "words.txt",
                "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", (e) => {
